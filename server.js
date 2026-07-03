@@ -96,10 +96,10 @@ app.get('/calendar-feed', async function (req, res) {
   }
   var username = matchedUser.username;
 
-  // ── 2. This user's category preferences (empty/missing = show all) ──
+  // ── 2. This user's storage-area preferences (empty/missing = show all) ──
   var prefs = await getSettingValue('calendar_prefs_' + username, {});
-  var prefCats = (prefs && Array.isArray(prefs.categories) && prefs.categories.length > 0)
-    ? prefs.categories
+  var prefStorages = (prefs && Array.isArray(prefs.storageTypes) && prefs.storageTypes.length > 0)
+    ? prefs.storageTypes
     : null;
 
   // ── 3. Active inventory items ──
@@ -117,18 +117,20 @@ app.get('/calendar-feed', async function (req, res) {
   lines.push('REFRESH-INTERVAL;VALUE=DURATION:PT4H');
   lines.push('X-PUBLISHED-TTL:PT4H');
 
+  var storageLabels = { freezer: 'Frozen', chiller: 'Chilled', dry: 'Dry' };
+
   (items || []).forEach(function (it) {
-    var cat = it.category || '';
-    if (prefCats !== null && prefCats.indexOf(cat) === -1) return;
+    var storage = it.storage_type || '';
+    if (prefStorages !== null && prefStorages.indexOf(storage) === -1) return;
 
     var name = it.product_name || 'Item';
-    var storage = it.storage_type || '';
+    var cat = it.category || '';
     var expiry = it.expiry_date || null;
     var production = it.production_date || null;
     var uidBase = it.id || (name + expiry + production);
 
     var descParts = [];
-    if (storage) descParts.push('Storage: ' + storage);
+    if (storage) descParts.push('Storage: ' + (storageLabels[storage] || storage));
     if (cat) descParts.push('Category: ' + cat);
     var desc = descParts.map(icsEscape).join('\\n');
 
