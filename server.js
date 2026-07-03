@@ -1,0 +1,168 @@
+const express = require('express');
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+/**
+ * SOURCE Inventory — Calendar Feed (Express app)
+ * -----------------------------------------------------------------
+ * Deploy this to Hostinger's Node.js Web Apps Hosting (Websites > Add
+ * Website > Node.js Apps > Import Git Repository).
+ *
+ * Each user gets their own link from the app (My Account > Calendar Sync),
+ * shaped like:  https://yourdomain.com/calendar-feed?token=abc123...
+ *
+ * That link can be subscribed to in Apple Calendar, Google Calendar, or
+ * Outlook. Their calendar app re-checks this URL automatically every few
+ * hours and pulls in new/updated dates — no further action needed.
+ *
+ * This app only READS from Supabase. It never writes anything.
+ * -----------------------------------------------------------------
+ */
+
+// ── CONFIG: same Supabase project your SOURCE app already uses ──────
+const SB_URL = 'https://oamwiaisjmltpihjbgiw.supabase.co';
+const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9hbXdpYWlzam1sdHBpaGpiZ2l3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI2Njg5MzAsImV4cCI6MjA5ODI0NDkzMH0.QzuoDSDCQqfIZYQHY2sbTpCbVYl7xYzjyQGtNcXMDhs';
+// If you ever change your Supabase project, update these two lines to
+// match the values shown in your app's Admin Panel > Supabase Connection.
+
+// ── Helpers ───────────────────────────────────────────────────────
+async function sbGet(path) {
+  try {
+    const res = await fetch(SB_URL.replace(/\/$/, '') + '/rest/v1/' + path, {
+      headers: {
+        apikey: SB_KEY,
+        Authorization: 'Bearer ' + SB_KEY,
+        'Content-Type': 'application/json'
+      }
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data) ? data : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+async function getSettingValue(key, def) {
+  const rows = await sbGet('settings?key=eq.' + encodeURIComponent(key));
+  const row = rows.find(function (r) { return r.key === key; });
+  return row && row.value !== undefined ? row.value : def;
+}
+
+function icsEscape(text) {
+  return String(text == null ? '' : text)
+    .replace(/\\/g, '\\\\')
+    .replace(/,/g, '\\,')
+    .replace(/;/g, '\\;')
+    .replace(/\r\n|\n|\r/g, '\\n');
+}
+
+// Fold long lines to 75 octets as required by the iCalendar spec (RFC 5545)
+function icsFold(line) {
+  if (line.length <= 75) return line;
+  var out = '', first = true, rest = line;
+  while (rest.length > 0) {
+    var chunkLen = first ? 75 : 74; // continuation lines get a leading space
+    out += (first ? '' : '\r\n ') + rest.slice(0, chunkLen);
+    rest = rest.slice(chunkLen);
+    first = false;
+  }
+  return out;
+}
+
+function icsDate(ymd) {
+  // "YYYY-MM-DD" -> "YYYYMMDD" (all-day event date format)
+  return String(ymd || '').slice(0, 10).replace(/-/g, '');
+}
+
+// ── The feed endpoint ────────────────────────────────────────────
+app.get('/calendar-feed', async function (req, res) {
+  var token = (req.query.token || '').toString().trim();
+  if (!token || !/^[a-z0-9]{10,64}$/i.test(token)) {
+    res.status(400).type('text/plain').send(
+      'Missing or invalid token.\nGet your personal link from the app: My Account > Calendar Sync.'
+    );
+    return;
+  }
+
+  // ── 1. Authenticate via token ──
+  var users = await getSettingValue('users', []);
+  var matchedUser = (users || []).find(function (u) { return u.calToken && u.calToken === token; });
+  if (!matchedUser) {
+    res.status(403).type('text/plain').send(
+      'This calendar link is invalid.\nGenerate a new one from the app: My Account > Calendar Sync.'
+    );
+    return;
+  }
+  var username = matchedUser.username;
+
+  // ── 2. This user's category preferences (empty/missing = show all) ──
+  var prefs = await getSettingValue('calendar_prefs_' + username, {});
+  var prefCats = (prefs && Array.isArray(prefs.categories) && prefs.categories.length > 0)
+    ? prefs.categories
+    : null;
+
+  // ── 3. Active inventory items ──
+  var items = await sbGet('date_tracker?status=eq.active&order=expiry_date.asc');
+
+  // ── 4. Build the .ics feed ──
+  var now = new Date().toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+  var lines = [];
+  lines.push('BEGIN:VCALENDAR');
+  lines.push('VERSION:2.0');
+  lines.push('PRODID:-//SOURCE//Inventory Feed//EN');
+  lines.push('CALSCALE:GREGORIAN');
+  lines.push('METHOD:PUBLISH');
+  lines.push(icsFold('X-WR-CALNAME:SOURCE Inventory (' + icsEscape(username) + ')'));
+  lines.push('REFRESH-INTERVAL;VALUE=DURATION:PT4H');
+  lines.push('X-PUBLISHED-TTL:PT4H');
+
+  (items || []).forEach(function (it) {
+    var cat = it.category || '';
+    if (prefCats !== null && prefCats.indexOf(cat) === -1) return;
+
+    var name = it.product_name || 'Item';
+    var storage = it.storage_type || '';
+    var expiry = it.expiry_date || null;
+    var production = it.production_date || null;
+    var uidBase = it.id || (name + expiry + production);
+
+    var descParts = [];
+    if (storage) descParts.push('Storage: ' + storage);
+    if (cat) descParts.push('Category: ' + cat);
+    var desc = descParts.map(icsEscape).join('\\n');
+
+    if (expiry) {
+      lines.push('BEGIN:VEVENT');
+      lines.push(icsFold('UID:expiry-' + uidBase + '@source-inventory'));
+      lines.push('DTSTAMP:' + now);
+      lines.push('DTSTART;VALUE=DATE:' + icsDate(expiry));
+      lines.push(icsFold('SUMMARY:' + icsEscape('Expires: ' + name)));
+      if (desc) lines.push(icsFold('DESCRIPTION:' + desc));
+      lines.push('END:VEVENT');
+    }
+    if (production) {
+      lines.push('BEGIN:VEVENT');
+      lines.push(icsFold('UID:production-' + uidBase + '@source-inventory'));
+      lines.push('DTSTAMP:' + now);
+      lines.push('DTSTART;VALUE=DATE:' + icsDate(production));
+      lines.push(icsFold('SUMMARY:' + icsEscape('Produced: ' + name)));
+      if (desc) lines.push(icsFold('DESCRIPTION:' + desc));
+      lines.push('END:VEVENT');
+    }
+  });
+
+  lines.push('END:VCALENDAR');
+
+  res.set('Content-Type', 'text/calendar; charset=utf-8');
+  res.set('Content-Disposition', 'inline; filename="source-inventory.ics"');
+  res.send(lines.join('\r\n'));
+});
+
+app.get('/', function (req, res) {
+  res.type('text/plain').send('SOURCE calendar feed is running. Use /calendar-feed?token=YOUR_TOKEN');
+});
+
+app.listen(PORT, function () {
+  console.log('Calendar feed server running on port ' + PORT);
+});

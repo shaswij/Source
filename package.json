@@ -1,0 +1,16 @@
+{
+  "name": "source-calendar-feed",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Personal iCalendar (.ics) feed of SOURCE inventory production/expiry dates, read from Supabase.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}
