@@ -117,8 +117,6 @@ app.get('/calendar-feed', async function (req, res) {
   lines.push('REFRESH-INTERVAL;VALUE=DURATION:PT4H');
   lines.push('X-PUBLISHED-TTL:PT4H');
 
-  var storageLabels = { freezer: 'Frozen', chiller: 'Chilled', dry: 'Dry' };
-
   (items || []).forEach(function (it) {
     var storage = it.storage_type || '';
     if (prefStorages !== null && prefStorages.indexOf(storage) === -1) return;
@@ -126,32 +124,20 @@ app.get('/calendar-feed', async function (req, res) {
     var name = it.product_name || 'Item';
     var cat = it.category || '';
     var expiry = it.expiry_date || null;
-    var production = it.production_date || null;
-    var uidBase = it.id || (name + expiry + production);
+    var uidBase = it.id || (name + expiry);
 
-    var descParts = [];
-    if (storage) descParts.push('Storage: ' + (storageLabels[storage] || storage));
-    if (cat) descParts.push('Category: ' + cat);
-    var desc = descParts.map(icsEscape).join('\\n');
+    if (!expiry) return; // only expiry dates are synced — no production/received dates
 
-    if (expiry) {
-      lines.push('BEGIN:VEVENT');
-      lines.push(icsFold('UID:expiry-' + uidBase + '@source-inventory'));
-      lines.push('DTSTAMP:' + now);
-      lines.push('DTSTART;VALUE=DATE:' + icsDate(expiry));
-      lines.push(icsFold('SUMMARY:' + icsEscape('Expires: ' + name)));
-      if (desc) lines.push(icsFold('DESCRIPTION:' + desc));
-      lines.push('END:VEVENT');
-    }
-    if (production) {
-      lines.push('BEGIN:VEVENT');
-      lines.push(icsFold('UID:production-' + uidBase + '@source-inventory'));
-      lines.push('DTSTAMP:' + now);
-      lines.push('DTSTART;VALUE=DATE:' + icsDate(production));
-      lines.push(icsFold('SUMMARY:' + icsEscape('Produced: ' + name)));
-      if (desc) lines.push(icsFold('DESCRIPTION:' + desc));
-      lines.push('END:VEVENT');
-    }
+    var summary = 'Expires: ' + name + (cat ? ' (' + cat + ')' : '');
+    var desc = cat ? icsEscape('Category: ' + cat) : '';
+
+    lines.push('BEGIN:VEVENT');
+    lines.push(icsFold('UID:expiry-' + uidBase + '@source-inventory'));
+    lines.push('DTSTAMP:' + now);
+    lines.push('DTSTART;VALUE=DATE:' + icsDate(expiry));
+    lines.push(icsFold('SUMMARY:' + icsEscape(summary)));
+    if (desc) lines.push(icsFold('DESCRIPTION:' + desc));
+    lines.push('END:VEVENT');
   });
 
   lines.push('END:VCALENDAR');
