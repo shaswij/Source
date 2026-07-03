@@ -117,18 +117,34 @@ app.get('/calendar-feed', async function (req, res) {
   lines.push('REFRESH-INTERVAL;VALUE=DURATION:PT4H');
   lines.push('X-PUBLISHED-TTL:PT4H');
 
+  var catLabels = {
+    fruits_veg: 'fruits/veg',
+    nuts: 'dry fruits & nuts',
+    dry: 'dry stores',
+    direct_cold: 'cold cuts',
+    direct_puree: 'puree',
+    direct_asian: 'asian',
+    direct_dairy: 'dairy',
+    direct_other: 'other',
+    micro_greens: 'micro greens',
+    operation_supply: 'operation supply'
+  };
+  var storageLabels = { freezer: 'frozen', chiller: 'chilled', dry: 'dry' };
+
   (items || []).forEach(function (it) {
-    var storage = it.storage_type || '';
-    if (prefStorages !== null && prefStorages.indexOf(storage) === -1) return;
+    var storageCode = it.storage_type || '';
+    if (prefStorages !== null && prefStorages.indexOf(storageCode) === -1) return;
 
     var name = it.product_name || 'Item';
-    var cat = it.category || '';
+    var cat = catLabels[it.category] || (it.category ? String(it.category).toLowerCase() : '');
+    var storage = storageLabels[storageCode] || storageCode.toLowerCase();
     var expiry = it.expiry_date || null;
     var uidBase = it.id || (name + expiry);
 
     if (!expiry) return; // only expiry dates are synced — no production/received dates
 
-    var summary = 'Expires: ' + name + (cat ? ' (' + cat + ')' : '');
+    var tag = cat ? (cat + '/' + storage) : storage;
+    var summary = 'Expires: ' + name + (tag ? ' (' + tag + ')' : '');
     var desc = cat ? icsEscape('Category: ' + cat) : '';
 
     lines.push('BEGIN:VEVENT');
