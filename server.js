@@ -119,7 +119,8 @@ app.get('/calendar-feed', async function (req, res) {
     : null;
 
   // ── 3. Active inventory items ──
-  var items = await sbGet('date_tracker?status=eq.active&order=expiry_date.asc');
+  var items = await sbRpc('rpc_feed_get_active_items', { p_cal_token: token });
+  if (!Array.isArray(items)) items = [];
 
   // ── 4. Build the .ics feed ──
   var now = new Date().toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
