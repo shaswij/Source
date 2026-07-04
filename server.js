@@ -49,6 +49,24 @@ async function getSettingValue(key, def) {
   return row && row.value !== undefined ? row.value : def;
 }
 
+async function sbRpc(fnName, params) {
+  try {
+    const res = await fetch(SB_URL.replace(/\/$/, '') + '/rest/v1/rpc/' + fnName, {
+      method: 'POST',
+      headers: {
+        apikey: SB_KEY,
+        Authorization: 'Bearer ' + SB_KEY,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(params || {})
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch (e) {
+    return null;
+  }
+}
+
 function icsEscape(text) {
   return String(text == null ? '' : text)
     .replace(/\\/g, '\\\\')
@@ -86,15 +104,13 @@ app.get('/calendar-feed', async function (req, res) {
   }
 
   // ── 1. Authenticate via token ──
-  var users = await getSettingValue('users', []);
-  var matchedUser = (users || []).find(function (u) { return u.calToken && u.calToken === token; });
-  if (!matchedUser) {
+  var username = await sbRpc('rpc_lookup_user_by_cal_token', { p_token: token });
+  if (!username) {
     res.status(403).type('text/plain').send(
       'This calendar link is invalid.\nGenerate a new one from the app: My Account > Calendar Sync.'
     );
     return;
   }
-  var username = matchedUser.username;
 
   // ── 2. This user's storage-area preferences (empty/missing = show all) ──
   var prefs = await getSettingValue('calendar_prefs_' + username, {});
