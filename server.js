@@ -18,10 +18,13 @@ const PORT = process.env.PORT || 3000;
  * This app only READS from Supabase. It never writes anything.
  *
  * UPDATED for multi-kitchen support: a user assigned to specific
- * kitchen(s) now only sees expiry/production dates for THOSE kitchens
- * in their calendar feed, instead of every kitchen mixed together.
- * Someone with no kitchen restriction (all-access, e.g. most admins)
- * still sees everything, same as before this update.
+ * kitchen(s) now only sees expiry dates for THOSE kitchens in their
+ * calendar feed, instead of every kitchen mixed together. Someone
+ * with no kitchen restriction (all-access, e.g. most admins) still
+ * sees everything, same as before this update.
+ *
+ * Only expiry dates are included — production dates are intentionally
+ * left off the calendar.
  * -----------------------------------------------------------------
  */
 
@@ -155,9 +158,10 @@ app.get('/calendar-feed', async function (req, res) {
     var name = it.product_name || 'Item';
     var cat = it.category || '';
     var expiry = it.expiry_date || null;
-    var production = it.production_date || null;
-    var uidBase = it.id || (name + expiry + production);
+    var uidBase = it.id || (name + expiry);
     var kitchenName = it.location_id ? locationNameById[it.location_id] : null;
+
+    if (!expiry) return; // nothing to put on the calendar without an expiry date
 
     var descParts = [];
     if (showKitchenLabel && kitchenName) descParts.push('Kitchen: ' + kitchenName);
@@ -167,24 +171,13 @@ app.get('/calendar-feed', async function (req, res) {
 
     var summarySuffix = (showKitchenLabel && kitchenName) ? ' (' + kitchenName + ')' : '';
 
-    if (expiry) {
-      lines.push('BEGIN:VEVENT');
-      lines.push(icsFold('UID:expiry-' + uidBase + '@source-inventory'));
-      lines.push('DTSTAMP:' + now);
-      lines.push('DTSTART;VALUE=DATE:' + icsDate(expiry));
-      lines.push(icsFold('SUMMARY:' + icsEscape('Expires: ' + name + summarySuffix)));
-      if (desc) lines.push(icsFold('DESCRIPTION:' + desc));
-      lines.push('END:VEVENT');
-    }
-    if (production) {
-      lines.push('BEGIN:VEVENT');
-      lines.push(icsFold('UID:production-' + uidBase + '@source-inventory'));
-      lines.push('DTSTAMP:' + now);
-      lines.push('DTSTART;VALUE=DATE:' + icsDate(production));
-      lines.push(icsFold('SUMMARY:' + icsEscape('Produced: ' + name + summarySuffix)));
-      if (desc) lines.push(icsFold('DESCRIPTION:' + desc));
-      lines.push('END:VEVENT');
-    }
+    lines.push('BEGIN:VEVENT');
+    lines.push(icsFold('UID:expiry-' + uidBase + '@source-inventory'));
+    lines.push('DTSTAMP:' + now);
+    lines.push('DTSTART;VALUE=DATE:' + icsDate(expiry));
+    lines.push(icsFold('SUMMARY:' + icsEscape('Expires: ' + name + summarySuffix)));
+    if (desc) lines.push(icsFold('DESCRIPTION:' + desc));
+    lines.push('END:VEVENT');
   });
 
   lines.push('END:VCALENDAR');
