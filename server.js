@@ -16,6 +16,12 @@ const PORT = process.env.PORT || 3000;
  * hours and pulls in new/updated dates — no further action needed.
  *
  * This app only READS from Supabase. It never writes anything.
+ *
+ * UPDATED for multi-kitchen support: a user assigned to specific
+ * kitchen(s) now only sees expiry/production dates for THOSE kitchens
+ * in their calendar feed, instead of every kitchen mixed together.
+ * Someone with no kitchen restriction (all-access, e.g. most admins)
+ * still sees everything, same as before this update.
  * -----------------------------------------------------------------
  */
 
@@ -49,22 +55,14 @@ async function getSettingValue(key, def) {
   return row && row.value !== undefined ? row.value : def;
 }
 
-async function sbRpc(fnName, params) {
-  try {
-    const res = await fetch(SB_URL.replace(/\/$/, '') + '/rest/v1/rpc/' + fnName, {
-      method: 'POST',
-      headers: {
-        apikey: SB_KEY,
-        Authorization: 'Bearer ' + SB_KEY,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(params || {})
-    });
-    if (!res.ok) return null;
-    return await res.json();
-  } catch (e) {
-    return null;
-  }
+// Reads a user's assigned kitchens, supporting both the current
+// 'location_ids' array field and the older single 'location_id' field
+// (from before multi-kitchen support), same fallback logic the app's
+// own rpc_login uses. Returns [] for "all kitchens" access.
+function getUserLocationIds(user) {
+  if (Array.isArray(user.location_ids)) return user.location_ids.filter(Boolean);
+  if (user.location_id) return [user.location_id];
+  return [];
 }
 
 function icsEscape(text) {
@@ -104,13 +102,15 @@ app.get('/calendar-feed', async function (req, res) {
   }
 
   // ── 1. Authenticate via token ──
-  var username = await sbRpc('rpc_lookup_user_by_cal_token', { p_token: token });
-  if (!username) {
+  var users = await getSettingValue('users', []);
+  var matchedUser = (users || []).find(function (u) { return u.calToken && u.calToken === token; });
+  if (!matchedUser) {
     res.status(403).type('text/plain').send(
       'This calendar link is invalid.\nGenerate a new one from the app: My Account > Calendar Sync.'
     );
     return;
   }
+  var username = matchedUser.username;
 
   // ── 2. This user's storage-area preferences (empty/missing = show all) ──
   var prefs = await getSettingValue('calendar_prefs_' + username, {});
@@ -118,11 +118,23 @@ app.get('/calendar-feed', async function (req, res) {
     ? prefs.storageTypes
     : null;
 
-  // ── 3. Active inventory items ──
-  var items = await sbRpc('rpc_feed_get_active_items', { p_cal_token: token });
-  if (!Array.isArray(items)) items = [];
+  // ── 3. This user's kitchen access (empty = all kitchens) ──
+  var myLocationIds = getUserLocationIds(matchedUser);
 
-  // ── 4. Build the .ics feed ──
+  // ── 4. Active inventory items, filtered to their kitchen(s) if restricted ──
+  var itemsPath = 'date_tracker?status=eq.active&order=expiry_date.asc';
+  if (myLocationIds.length > 0) {
+    itemsPath += '&location_id=in.(' + myLocationIds.map(encodeURIComponent).join(',') + ')';
+  }
+  var items = await sbGet(itemsPath);
+
+  // ── 5. Kitchen names, for labeling events when more than one kitchen exists ──
+  var allLocations = await sbGet('locations?select=id,name');
+  var locationNameById = {};
+  (allLocations || []).forEach(function (l) { locationNameById[l.id] = l.name; });
+  var showKitchenLabel = (allLocations || []).length > 1;
+
+  // ── 6. Build the .ics feed ──
   var now = new Date().toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
   var lines = [];
   lines.push('BEGIN:VCALENDAR');
@@ -134,43 +146,45 @@ app.get('/calendar-feed', async function (req, res) {
   lines.push('REFRESH-INTERVAL;VALUE=DURATION:PT4H');
   lines.push('X-PUBLISHED-TTL:PT4H');
 
-  var catLabels = {
-    fruits_veg: 'fruits/veg',
-    nuts: 'dry fruits & nuts',
-    dry: 'dry stores',
-    direct_cold: 'cold cuts',
-    direct_puree: 'puree',
-    direct_asian: 'asian',
-    direct_dairy: 'dairy',
-    direct_other: 'other',
-    micro_greens: 'micro greens',
-    operation_supply: 'operation supply'
-  };
-  var storageLabels = { freezer: 'frozen', chiller: 'chilled', dry: 'dry' };
+  var storageLabels = { freezer: 'Frozen', chiller: 'Chilled', dry: 'Dry' };
 
   (items || []).forEach(function (it) {
-    var storageCode = it.storage_type || '';
-    if (prefStorages !== null && prefStorages.indexOf(storageCode) === -1) return;
+    var storage = it.storage_type || '';
+    if (prefStorages !== null && prefStorages.indexOf(storage) === -1) return;
 
     var name = it.product_name || 'Item';
-    var cat = catLabels[it.category] || (it.category ? String(it.category).toLowerCase() : '');
-    var storage = storageLabels[storageCode] || storageCode.toLowerCase();
+    var cat = it.category || '';
     var expiry = it.expiry_date || null;
-    var uidBase = it.id || (name + expiry);
+    var production = it.production_date || null;
+    var uidBase = it.id || (name + expiry + production);
+    var kitchenName = it.location_id ? locationNameById[it.location_id] : null;
 
-    if (!expiry) return; // only expiry dates are synced — no production/received dates
+    var descParts = [];
+    if (showKitchenLabel && kitchenName) descParts.push('Kitchen: ' + kitchenName);
+    if (storage) descParts.push('Storage: ' + (storageLabels[storage] || storage));
+    if (cat) descParts.push('Category: ' + cat);
+    var desc = descParts.map(icsEscape).join('\\n');
 
-    var tag = cat ? (cat + '/' + storage) : storage;
-    var summary = 'Expires: ' + name + (tag ? ' (' + tag + ')' : '');
-    var desc = cat ? icsEscape('Category: ' + cat) : '';
+    var summarySuffix = (showKitchenLabel && kitchenName) ? ' (' + kitchenName + ')' : '';
 
-    lines.push('BEGIN:VEVENT');
-    lines.push(icsFold('UID:expiry-' + uidBase + '@source-inventory'));
-    lines.push('DTSTAMP:' + now);
-    lines.push('DTSTART;VALUE=DATE:' + icsDate(expiry));
-    lines.push(icsFold('SUMMARY:' + icsEscape(summary)));
-    if (desc) lines.push(icsFold('DESCRIPTION:' + desc));
-    lines.push('END:VEVENT');
+    if (expiry) {
+      lines.push('BEGIN:VEVENT');
+      lines.push(icsFold('UID:expiry-' + uidBase + '@source-inventory'));
+      lines.push('DTSTAMP:' + now);
+      lines.push('DTSTART;VALUE=DATE:' + icsDate(expiry));
+      lines.push(icsFold('SUMMARY:' + icsEscape('Expires: ' + name + summarySuffix)));
+      if (desc) lines.push(icsFold('DESCRIPTION:' + desc));
+      lines.push('END:VEVENT');
+    }
+    if (production) {
+      lines.push('BEGIN:VEVENT');
+      lines.push(icsFold('UID:production-' + uidBase + '@source-inventory'));
+      lines.push('DTSTAMP:' + now);
+      lines.push('DTSTART;VALUE=DATE:' + icsDate(production));
+      lines.push(icsFold('SUMMARY:' + icsEscape('Produced: ' + name + summarySuffix)));
+      if (desc) lines.push(icsFold('DESCRIPTION:' + desc));
+      lines.push('END:VEVENT');
+    }
   });
 
   lines.push('END:VCALENDAR');
