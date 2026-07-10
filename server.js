@@ -30,9 +30,22 @@ const PORT = process.env.PORT || 3000;
 
 // ── CONFIG: same Supabase project your SOURCE app already uses ──────
 const SB_URL = 'https://oamwiaisjmltpihjbgiw.supabase.co';
-const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9hbXdpYWlzam1sdHBpaGpiZ2l3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI2Njg5MzAsImV4cCI6MjA5ODI0NDkzMH0.QzuoDSDCQqfIZYQHY2sbTpCbVYl7xYzjyQGtNcXMDhs';
+// IMPORTANT: this must be the SERVICE ROLE key, not the anon key. This
+// service has no user session at all (it's a background feed, not
+// something a browser visits), so it needs to bypass row-level security
+// entirely rather than depend on RLS treating "no session" as unrestricted
+// — that behavior was removed when kitchen-scoping was tightened to apply
+// to every role except Super Admin. The service role key always bypasses
+// RLS regardless of any future RLS changes, so this fix won't break again.
+//
+// Find it in: Supabase Dashboard -> Settings -> API -> service_role key
+// (NOT the anon/public key). Keep this secret — this file should never be
+// exposed publicly or committed somewhere public, since this key has full
+// access to your database.
+const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9hbXdpYWlzam1sdHBpaGpiZ2l3Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MjY2ODkzMCwiZXhwIjoyMDk4MjQ0OTMwfQ.cyAk-6IK_3aDUlERp5ZIjT2ain8sy4rgpW6itd2-5Vs';
 // If you ever change your Supabase project, update these two lines to
-// match the values shown in your app's Admin Panel > Supabase Connection.
+// match the values shown in your app's Admin Panel > Supabase Connection
+// (for the URL) and Settings > API (for the service_role key).
 
 // ── Helpers ───────────────────────────────────────────────────────
 async function sbGet(path) {
